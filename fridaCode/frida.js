@@ -1,69 +1,114 @@
 
 
-function hooken(){
-    // frida-hook.js
-    Java.perform(function() {
-        // Hook Coded 类
-        var Coded = Java.use('com.immomo.momo.util.jni.Coded');
 
-        // Hook aesEncode 方法
-        Coded["aesEncode"].implementation = function (inputData, inputLen, keyData, keyLen, outputBuffer) {
+/**
+    这也是一个frida绕过的方法;
+    Hook Android linker 中的 call_constructors 函数
+    当目标 SO 库 libmsaoaidsec.so 被加载时，替换其内部偏移 0x123F0 处的函数为一个空函数
+**/
+// 标志位，防止多次替换
+var isHooked = false;
+// 方法开始
+function hook_constrcutor(){
+    // 枚举linker64的符号表，找到 call_constructor 函数
+    // var symbols = Process.findModuleByName("linker").enumerateSymbols();
+    var linker = Process.findModuleByName("linker64") ||
+                    Process.findModuleByName("linker");
 
-            console.log("\n===== AES ENCODE HOOK =====");
-            console.log("Input Data: " + bytesToHex(inputData).substring(0, 100) + "...");
-            console.log("Input Data: " + inputData);
+    if (!linker) {
+        console.error("[-] Failed to find linker module!");
+        return;
+    }
+    // 找linker模块
+    var symbols = linker.enumerateSymbols();
 
+    // 在这里开始找函数(这是SO初始化时调用的构造函数;负责执行 .init_array 等)
+    var call_constructors = null;
+    for (let i = 0; i < symbols.length; i++) {
+        var symbol = symbols[i];
+        if (symbol.name.indexOf("_dl__ZN6soinfo17call_constructorsEv") > -1){
+            call_constructors = symbol.address;
+        }
+    }
+    console.log("find call_constructors func arr:\t", call_constructors);
 
-            console.log("Input Length: " + inputLen);
-            console.log("Key Data: " + bytesToHex(keyData).substring(0, 50) + "...");
-            console.log("Key Data: " + keyData);
-
-            console.log("Key Length: " + keyLen);
-
-            // 调用原始方法
-            var result = this.aesEncode(inputData, inputLen, keyData, keyLen, outputBuffer);
-
-            // 提取加密结果
-            // var encryptedData = outputBuffer.slice(0, result);
-            // console.log("Encrypted Data: " + bytesToHex(encryptedData).substring(0, 100) + "...");
-            console.log("Output Length: " + result);
-
-            return result;
-        };
-
-        // // Hook sign 方法
-        // Coded.sign.overload('[B', '[B').implementation = function(data, key) {
-        //     console.log("\n===== SIGN HOOK =====");
-        //     console.log("Sign Data: " + bytesToHex(data).substring(0, 100) + "...");
-        //     console.log("Sign Key: " + bytesToHex(key).substring(0, 50) + "...");
-
-        //     // 调用原始方法
-        //     var result = this.sign(data, key);
-
-        //     console.log("Signature: " + result);
-        //     return result;
-        // };
-
-        // // Hook c() 方法
-        // var TargetClass = Java.use('com.immomo.momoenc.TargetClass'); // 替换为实际类名
-        // TargetClass.c.implementation = function() {
-        //     console.log("\n===== c() METHOD HOOK =====");
-        //     console.log("Secret Key (f75235d): " + this.f75235d.value);
-        //     console.log("Params (j): " + JSON.stringify(this.j.value));
-
-        //     // 调用原始方法
-        //     this.c();
-        // };
-
-        // 辅助函数：字节数组转十六进制
-        function bytesToHex(buffer) {
-            return Array.from(new Uint8Array(buffer))
-                .map(b => b.toString(16).padStart(2, '0'))
-                .join('');
+    Interceptor.attach(call_constructors,{
+        // 必须要在执行前做
+        onEnter:function (args){
+        // 这里判断了一下,检查当前hook的so是否是libmsaoaidsec.so
+        var target_soAddr = Module.findBaseAddress("libmsaoaidsec.so");
+            if(target_soAddr != null){
+                if (!isHooked){
+                    isHooked = true;
+                    // 这里直接使用NativeCallback,来创建了一个空函数替代原函数
+                    Interceptor.replace(target_soAddr.add(0x123F0), new NativeCallback(function (){
+                        // 替换成功后打印一下日志
+                        console.log(`0x123F0 replace Success！`)
+                    },"void",[]))
+                }
+            }
         }
     });
 }
 
+function hook_doPost(){
+    // 定位目标类
+    var httpClass = Java.use("com.immomo.momo.protocol.http.a.a");
+    console.log('Hello !! ')
+    // Hook post 方法
+    httpClass.post.overload(
+        'java.lang.String',
+        'java.util.Map',
+        '[Lcom.immomo.http.a;',
+        'java.util.Map',
+        'int',
+        'boolean'
+    ).implementation = function(url, params, processors, headers, timeout, flag) {
+        console.log("\n===== [HTTP POST REQUEST] =====");
+
+        // 打印基本参数
+        console.log("URL: " + url);
+        console.log("Timeout: " + timeout);
+        console.log("Flag: " + flag);
+
+        // 打印请求参数
+        console.log("\n[Request Parameters]");
+        if (params) {
+            var paramKeys = params.keySet().toArray();
+            for (var i = 0; i < paramKeys.length; i++) {
+                var key = paramKeys[i];
+                var value = params.get(key);
+                console.log("  " + key + ": " + value);
+            }
+        } else {
+            console.log("  (null)");
+        }
+
+        // 打印请求头
+        if (headers) {
+            try {
+                console.log("\n[Request Headers----------------------]");
+                // 更安全的遍历方式
+                var headerIterator = headers.entrySet().iterator();
+                while (headerIterator.hasNext()) {
+                    var entry = headerIterator.next();
+                    console.log("  " + entry.getKey() + ": " + entry.getValue());
+                }
+            } catch (e) {
+                console.log("  Error printing headers: " + e);
+
+                // 备选方法
+                try {
+                    console.log("  Headers content: " + headers.toString());
+                } catch (e2) {
+                    console.log("  Failed to print headers");
+                }
+            }
+        } else {
+            console.log("  (null)");
+        }
+    }
+}
 
 /*
 * frida检测绕过
@@ -650,140 +695,41 @@ function hookTest(){
 }
 
 
-/**
-    这也是一个frida绕过的方法;
-    Hook Android linker 中的 call_constructors 函数
-    当目标 SO 库 libmsaoaidsec.so 被加载时，替换其内部偏移 0x123F0 处的函数为一个空函数
-**/
-// 标志位，防止多次替换
-var isHooked = false;
-// 方法开始
-function hook_constrcutor(){
-    // 枚举linker64的符号表，找到 call_constructor 函数
-    // var symbols = Process.findModuleByName("linker").enumerateSymbols();
-    var linker = Process.findModuleByName("linker64") ||
-                    Process.findModuleByName("linker");
+// so层hook方法示例
+function soFunc(){
+    //获取so的基址
+    var soAddr = Module.findBaseAddress("libmetasec_ml.so");
+    console.log(soAddr);
+    //获取函数地址;so基址 + 函数地址
+    var funcAddr = soAddr.add(0xf07f0);
+    console.log(funcAddr);
+    //判断函数地址不为空则开始hook
+    if(funcAddr != null){
+        Interceptor.attach(funcAddr,{
+            onEnter:function(args){
+                //打印参数
+                console.log(`参数1: ${args[1]}`);
+                console.log(`参数2: ${args[2]}`);
+                console.log(`参数3: ${args[3]}`);
+                console.log(`参数4: ${args[4]}`);
+                console.log(`参数5: ${args[5]}`);
 
-    if (!linker) {
-        console.error("[-] Failed to find linker module!");
-        return;
-    }
-    // 找linker模块
-    var symbols = linker.enumerateSymbols();
-
-    // 在这里开始找函数(这是SO初始化时调用的构造函数;负责执行 .init_array 等)
-    var call_constructors = null;
-    for (let i = 0; i < symbols.length; i++) {
-        var symbol = symbols[i];
-        if (symbol.name.indexOf("_dl__ZN6soinfo17call_constructorsEv") > -1){
-            call_constructors = symbol.address;
-        }
-    }
-    console.log("find call_constructors func arr:\t", call_constructors);
-
-    Interceptor.attach(call_constructors,{
-        // 必须要在执行前做
-        onEnter:function (args){
-        // 这里判断了一下,检查当前hook的so是否是libmsaoaidsec.so
-        var target_soAddr = Module.findBaseAddress("libmsaoaidsec.so");
-            if(target_soAddr != null){
-                if (!isHooked){
-                    isHooked = true;
-                    // 这里直接使用NativeCallback,来创建了一个空函数替代原函数
-                    Interceptor.replace(target_soAddr.add(0x123F0), new NativeCallback(function (){
-                        // 替换成功后打印一下日志
-                        console.log(`0x123F0 replace Success！`)
-                    },"void",[]))
-                }
+            },
+            onLeave:function(retval){
+                //打印返回值
+                var retCString = Java.vm.tryGetEnv().getStringUtfChars(retval)
+                console.log(`retCString ${retCString} retval ${retCString.readCString()}`);
+                console.log(hexdump(retCString, {
+                    offset: 0, // 打印偏移量
+                    length: 1024, // 打印长度
+                    header: true, // 是否打印表头
+                    ansi: true // 是否使用ANSI色彩
+                }));
             }
-        }
-    });
-}
-
-function hook_doPost(){
-    // 定位目标类
-    var httpClass = Java.use("com.immomo.momo.protocol.http.a.a");
-    console.log('Hello !! ')
-    // Hook post 方法
-    httpClass.post.overload(
-        'java.lang.String',
-        'java.util.Map',
-        '[Lcom.immomo.http.a;',
-        'java.util.Map',
-        'int',
-        'boolean'
-    ).implementation = function(url, params, processors, headers, timeout, flag) {
-        console.log("\n===== [HTTP POST REQUEST] =====");
-
-        // 打印基本参数
-        console.log("URL: " + url);
-        console.log("Timeout: " + timeout);
-        console.log("Flag: " + flag);
-
-        // 打印请求参数
-        console.log("\n[Request Parameters]");
-        if (params) {
-            var paramKeys = params.keySet().toArray();
-            for (var i = 0; i < paramKeys.length; i++) {
-                var key = paramKeys[i];
-                var value = params.get(key);
-                console.log("  " + key + ": " + value);
-            }
-        } else {
-            console.log("  (null)");
-        }
-
-        // 打印请求头
-        if (headers) {
-            try {
-                console.log("\n[Request Headers----------------------]");
-                // 更安全的遍历方式
-                var headerIterator = headers.entrySet().iterator();
-                while (headerIterator.hasNext()) {
-                    var entry = headerIterator.next();
-                    console.log("  " + entry.getKey() + ": " + entry.getValue());
-                }
-            } catch (e) {
-                console.log("  Error printing headers: " + e);
-
-                // 备选方法
-                try {
-                    console.log("  Headers content: " + headers.toString());
-                } catch (e2) {
-                    console.log("  Failed to print headers");
-                }
-            }
-        } else {
-            console.log("  (null)");
-        }
+        });
     }
 }
 
-function post() {
-    Java.perform(function () {
-        let a = Java.use("com.immomo.momo.protocol.http.a.a");
-        var stringBuilder = Java.use("java.lang.StringBuilder");
-        a["doPost"].overload('java.lang.String', 'java.util.Map', '[Lcom.immomo.http.a;', 'java.util.Map', 'int', 'boolean', 'boolean').implementation = function (str, map, aVarArr, map2, i, z, z2) {
-            console.log(`a.doPost is called: str=${str}, map=${map}, aVarArr=${aVarArr}, map2=${map2}, i=${i}, z=${z}, z2=${z2}`);
-            //自己遍历HashMap
-            var key  = map.keySet(); //得到HashMap里面所有的key值
-            var it = key.iterator(); //得到迭代器
-            var resultMap  = stringBuilder.$new();//
-            while(it.hasNext()){ //迭代器循环
-                var keystr = it.next(); //取出key
-                var valuestr = map.get(keystr);//获取对应的值
-                resultMap.append(valuestr);//将值放到stringBuilder
-            }
-            // 由于Map它已经定义好了toString的方法,所以可以直接打印
-            console.log("shufferMap\t",resultMap.toString());
-
-
-            let result = this["doPost"](str, map, aVarArr, map2, i, z, z2);
-            console.log(`a.doPost result=${result}`);
-            return result;
-        };
-    });
-}
 
 function main(){
     Java.perform(function(){
@@ -796,9 +742,9 @@ function main(){
 
 setImmediate(main)
 
-// frida -U -f com.immomo.momo -l momo.js -o log.txt
-// frida -H 127.0.0.1:2333 -l momo.js -f com.immomo.momo -o log.txt
+// frida -U -f com.xxxx.xxx -l frida.js -o log.txt
+// frida -H 127.0.0.1:2333 -l frida.js -f com.xxxx.xxx -o log.txt
 
 
-// frida -U -f com.whty.wicity.china -l momo.js -o log.txt
+// frida -U -f com.xxxx.xxx -l frida.js -o log.txt
 
