@@ -4,11 +4,11 @@ import execjs
 import requests
 
 from loguru import logger
-from pyquery import PyQuery as pq
 import tools
 
 
 class LOGIN:
+    # 初始化一些参数
     def __init__(self):
         self.session = requests.Session()
         self.user_agent = "MomoChat/9.17.8_64 Android/13405 (Pixel 4 XL; Android 13; Gapps 0; zh_CN; 7; Google)"
