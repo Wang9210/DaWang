@@ -2,69 +2,120 @@
 
 function hooken(){
     // frida-hook.js
-Java.perform(function() {
-    // Hook Coded 类
-    var Coded = Java.use('com.immomo.momo.util.jni.Coded');
+    Java.perform(function() {
+        // Hook Coded 类
+        var Coded = Java.use('com.immomo.momo.util.jni.Coded');
 
-    // Hook aesEncode 方法
-    Coded["aesEncode"].implementation = function (inputData, inputLen, keyData, keyLen, outputBuffer) {
+        // Hook aesEncode 方法
+        Coded["aesEncode"].implementation = function (inputData, inputLen, keyData, keyLen, outputBuffer) {
 
-        console.log("\n===== AES ENCODE HOOK =====");
-        console.log("Input Data: " + bytesToHex(inputData).substring(0, 100) + "...");
-        console.log("Input Data: " + inputData);
+            console.log("\n===== AES ENCODE HOOK =====");
+            console.log("Input Data: " + bytesToHex(inputData).substring(0, 100) + "...");
+            console.log("Input Data: " + inputData);
 
 
-        console.log("Input Length: " + inputLen);
-        console.log("Key Data: " + bytesToHex(keyData).substring(0, 50) + "...");
-        console.log("Key Data: " + keyData);
+            console.log("Input Length: " + inputLen);
+            console.log("Key Data: " + bytesToHex(keyData).substring(0, 50) + "...");
+            console.log("Key Data: " + keyData);
 
-        console.log("Key Length: " + keyLen);
+            console.log("Key Length: " + keyLen);
 
-        // 调用原始方法
-        var result = this.aesEncode(inputData, inputLen, keyData, keyLen, outputBuffer);
+            // 调用原始方法
+            var result = this.aesEncode(inputData, inputLen, keyData, keyLen, outputBuffer);
 
-        // 提取加密结果
-        // var encryptedData = outputBuffer.slice(0, result);
-        // console.log("Encrypted Data: " + bytesToHex(encryptedData).substring(0, 100) + "...");
-        console.log("Output Length: " + result);
+            // 提取加密结果
+            // var encryptedData = outputBuffer.slice(0, result);
+            // console.log("Encrypted Data: " + bytesToHex(encryptedData).substring(0, 100) + "...");
+            console.log("Output Length: " + result);
 
-        return result;
-    };
+            return result;
+        };
 
-    // // Hook sign 方法
-    // Coded.sign.overload('[B', '[B').implementation = function(data, key) {
-    //     console.log("\n===== SIGN HOOK =====");
-    //     console.log("Sign Data: " + bytesToHex(data).substring(0, 100) + "...");
-    //     console.log("Sign Key: " + bytesToHex(key).substring(0, 50) + "...");
+        // // Hook sign 方法
+        // Coded.sign.overload('[B', '[B').implementation = function(data, key) {
+        //     console.log("\n===== SIGN HOOK =====");
+        //     console.log("Sign Data: " + bytesToHex(data).substring(0, 100) + "...");
+        //     console.log("Sign Key: " + bytesToHex(key).substring(0, 50) + "...");
 
-    //     // 调用原始方法
-    //     var result = this.sign(data, key);
+        //     // 调用原始方法
+        //     var result = this.sign(data, key);
 
-    //     console.log("Signature: " + result);
-    //     return result;
-    // };
+        //     console.log("Signature: " + result);
+        //     return result;
+        // };
 
-    // // Hook c() 方法
-    // var TargetClass = Java.use('com.immomo.momoenc.TargetClass'); // 替换为实际类名
-    // TargetClass.c.implementation = function() {
-    //     console.log("\n===== c() METHOD HOOK =====");
-    //     console.log("Secret Key (f75235d): " + this.f75235d.value);
-    //     console.log("Params (j): " + JSON.stringify(this.j.value));
+        // // Hook c() 方法
+        // var TargetClass = Java.use('com.immomo.momoenc.TargetClass'); // 替换为实际类名
+        // TargetClass.c.implementation = function() {
+        //     console.log("\n===== c() METHOD HOOK =====");
+        //     console.log("Secret Key (f75235d): " + this.f75235d.value);
+        //     console.log("Params (j): " + JSON.stringify(this.j.value));
 
-    //     // 调用原始方法
-    //     this.c();
-    // };
+        //     // 调用原始方法
+        //     this.c();
+        // };
 
-    // 辅助函数：字节数组转十六进制
-    function bytesToHex(buffer) {
-        return Array.from(new Uint8Array(buffer))
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-    }
-});
+        // 辅助函数：字节数组转十六进制
+        function bytesToHex(buffer) {
+            return Array.from(new Uint8Array(buffer))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+        }
+    });
 }
 
 
+/*
+* frida检测绕过
+* 1.获取pthread的函数地址
+* 2.定义pthread的NativaFuncaiton
+* 3.进行函数替换,将原函数替换为自己写的函数
+*    自己写的函数里对参数2进行判断;参数2就是线程回调函数地址
+*    如果出现目标地址,则直接返回,也就是不进行线程的创建
+*    如果未出现目标函数,则调用原函数,创建线程
+* 4.进行hook,同时打印函数地址,查看那个函数执行完毕frida会退出
+*/
+function hook_pthread() {
+    var pt_create_func = Module.findExportByName(null,'pthread_create');//获取函数地址
+    //console.log('pt_create_func:',pt_create_func);
+    var pthread_create = new NativeFunction(pt_create_func,"int",["pointer","pointer","pointer","pointer"])
+    Interceptor.replace( //替换函数
+        pt_create_func,new NativeCallback(function(arg0,arg1,arg2,arg3)
+        {
+            // console.log(arg2.toString())          //打印函数地址，找到frida检测的线程就可以不用输出函数地址了
+            if (arg2.toString().indexOf("ee4") != -1)//对每个可疑地址进行试错
+            {
+                console.log("success") //如果返回成功且主程序未退出则表示找到frida检测的线程
+                return 1; //有可能返回0
+            }
+            return pthread_create(arg0,arg1,arg2,arg3) //其他的正常调用原来的
+        },"int",["pointer","pointer","pointer","pointer"])
+    )
+}
+
+//hook dlopen函数
+function hook_dlopenExt(soName) {
+    //找到dlopen的函数地址
+    var addr = Module.findExportByName(null, "android_dlopen_ext");
+    Interceptor.attach(addr, {
+        onEnter: function(args){
+            //得到so的路径(路径里包含so的name);dlopen的第一个参数就是so的路径
+            var soPath = args[0].readCString();
+            //判断路径是否包含目标so名称
+            if(soPath.indexOf(soName) != -1){
+                //给一个标识,代表可以hook了,不能在onEnter里做hook,因为这时候so还没被加载;
+                this.hook = true;
+            }
+        }, onLeave: function(retval){
+            //这时候so已经被加载了,所以可以开始hook了
+            if(this.hook){
+                console.log("123");
+                //hook函数
+                //hookFunc(soName);
+            }
+        }
+    });
+}
 
 //hook okhttp3的证书检测方法,绕过证书检测,让它可以抓包
 function hook_ssl(){
@@ -444,6 +495,87 @@ function hook_ssl(){
 
 }
 
+// hook WebView的构造和setWebContentsDebuggingEnabled方法,开启调试
+function hook_WebView(){
+    console.log("hook_WebView Start !!! ");
+    Java.perform(function (){
+        var WebView = Java.use('android.webkit.WebView');
+
+        WebView.$init.overload('android.content.Context').implementation = function (a){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.$init.overload('android.content.Context', 'android.util.AttributeSet').implementation = function (a,b){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a,b);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.$init.overload('android.content.Context', 'android.util.AttributeSet', 'int').implementation = function (a,b,c){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a,b,c);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.$init.overload('android.content.Context', 'android.util.AttributeSet', 'int', 'int').implementation = function (a,b,c,d){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a,b,c,d);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.setWebContentsDebuggingEnabled.implementation = function (){
+            this.setWebContentsDebuggingEnabled(true);
+            console.log("setWebContentsDebuggingEnabled is called!");
+        }
+
+        // var SysWebView = Java.use("io.dcloud.common.adapter.ui.webview.SysWebView");
+        // console.log(SysWebView.setWebViewData);
+        // SysWebView.setWebViewData.implementation = function (){
+        //     console.log("setWebContentsDebuggingEnabled is called!");
+        // }
+    });
+
+    Java.perform(function (){
+        var WebView = Java.use('android.webkit.WebView');
+
+        WebView.$init.overload('android.content.Context').implementation = function (a){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.$init.overload('android.content.Context', 'android.util.AttributeSet').implementation = function (a,b){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a,b);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.$init.overload('android.content.Context', 'android.util.AttributeSet', 'int').implementation = function (a,b,c){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a,b,c);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.$init.overload('android.content.Context', 'android.util.AttributeSet', 'int', 'int').implementation = function (a,b,c,d){
+            console.log("webView.$init is called!");
+            var retval = this.$init(a,b,c,d);
+            this.setWebContentsDebuggingEnabled(true);
+            return retval;
+        }
+        WebView.setWebContentsDebuggingEnabled.implementation = function (){
+            this.setWebContentsDebuggingEnabled(true);
+            console.log("setWebContentsDebuggingEnabled is called!");
+        }
+
+        // var SysWebView = Java.use("io.dcloud.common.adapter.ui.webview.SysWebView");
+        // console.log(SysWebView.setWebViewData);
+        // SysWebView.setWebViewData.implementation = function (){
+        //     console.log("setWebContentsDebuggingEnabled is called!");
+        // }
+    });
+}
 
 // 监控so的加载
 function hook_dlopen(){
@@ -460,6 +592,7 @@ function hook_dlopen(){
     });
 }
 
+// 文件访问监控脚本
 function hook_file(){
     // file_monitor.js
     Java.perform(function() {
@@ -496,8 +629,35 @@ function hook_file(){
     });
 }
 
+
+// Java层hook方法示例
+function hookTest(){
+    console.log(`HookTest ! `)
+    Java.perform(function(){
+        let NetworkParams = Java.use("com.bytedance.frameworks.baselib.network.http.NetworkParams");
+        console.log(`NetworkParams ${NetworkParams}`)
+
+        //调用目标函数
+        var instance = NetworkParams.$new();
+        var retval = NetworkParams.tryAddSecurityFactor.overload('java.lang.String', 'java.util.Map').call(instance, s1, s2);
+        console.log(`ret : ${retval}`);
+
+        //转为Java的Map对象
+        var hashmap = Java.cast(retval,Java.use("java.util.HashMap"))
+        //直接toString方法输出
+        console.log(hashmap.toString())
+    })
+}
+
+
+/**
+    这也是一个frida绕过的方法;
+    Hook Android linker 中的 call_constructors 函数
+    当目标 SO 库 libmsaoaidsec.so 被加载时，替换其内部偏移 0x123F0 处的函数为一个空函数
+**/
 // 标志位，防止多次替换
 var isHooked = false;
+// 方法开始
 function hook_constrcutor(){
     // 枚举linker64的符号表，找到 call_constructor 函数
     // var symbols = Process.findModuleByName("linker").enumerateSymbols();
